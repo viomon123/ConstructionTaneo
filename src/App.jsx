@@ -1,52 +1,54 @@
 import { useState, useEffect } from 'react'
+import { supabase } from './supabaseClient'
 
 function App() {
-  const [inventory, setInventory] = useState(() => {
-    const saved = localStorage.getItem('inventory')
-    return saved ? JSON.parse(saved) : []
-  })
-  const [expenses, setExpenses] = useState(() => {
-    const saved = localStorage.getItem('expenses')
-    return saved ? JSON.parse(saved) : []
-  })
+  const [inventory, setInventory] = useState([])
+  const [expenses, setExpenses] = useState([])
   const [activeTab, setActiveTab] = useState('inventory')
 
   useEffect(() => {
-    localStorage.setItem('inventory', JSON.stringify(inventory))
-  }, [inventory])
+    const fetchData = async () => {
+      const { data: inv } = await supabase.from('inventory').select('*')
+      const { data: exp } = await supabase.from('expenses').select('*')
+      if (inv) setInventory(inv)
+      if (exp) setExpenses(exp)
+    }
+    fetchData()
+  }, [])
 
-  useEffect(() => {
-    localStorage.setItem('expenses', JSON.stringify(expenses))
-  }, [expenses])
-
-  const addItem = (item) => {
-    const newItem = { ...item, id: Date.now(), history: [{ date: new Date().toISOString().split('T')[0], quantity: item.quantity, price: item.price }] }
-    setInventory([...inventory, newItem])
+  const addItem = async (item) => {
+    const newItem = {
+      ...item,
+      id: Date.now(),
+      history: [{ date: new Date().toISOString().split('T')[0], quantity: item.quantity, price: item.price }]
+    }
+    await supabase.from('inventory').insert([newItem])
+    setInventory(prev => [...prev, newItem])
   }
 
-  const updateItem = (id, updates) => {
-    setInventory(inventory.map(item => {
-      if (item.id === id) {
-        const newHistory = [...item.history, { date: new Date().toISOString().split('T')[0], quantity: updates.quantity || item.quantity, price: updates.price || item.price }]
-        return { ...item, ...updates, history: newHistory }
-      }
-      return item
-    }))
+  const updateItem = async (id, updates) => {
+    const item = inventory.find(i => i.id === id)
+    const newHistory = [...item.history, { date: new Date().toISOString().split('T')[0], quantity: updates.quantity || item.quantity, price: updates.price || item.price }]
+    const updated = { ...item, ...updates, history: newHistory }
+    await supabase.from('inventory').update(updated).eq('id', id)
+    setInventory(prev => prev.map(i => i.id === id ? updated : i))
   }
 
-  const deleteItem = (id) => {
-    setInventory(inventory.filter(item => item.id !== id))
+  const deleteItem = async (id) => {
+    await supabase.from('inventory').delete().eq('id', id)
+    setInventory(prev => prev.filter(i => i.id !== id))
   }
 
-  const addExpense = (expense) => {
+  const addExpense = async (expense) => {
     const newExpense = { ...expense, id: Date.now() }
-    setExpenses([...expenses, newExpense])
+    await supabase.from('expenses').insert([newExpense])
+    setExpenses(prev => [...prev, newExpense])
   }
 
   const totalInventoryCost = inventory.reduce((sum, item) => sum + (item.quantity * item.price), 0)
 
   const expensesByMonth = expenses.reduce((acc, exp) => {
-    const month = exp.date.slice(0, 7) // YYYY-MM
+    const month = exp.date.slice(0, 7)
     if (!acc[month]) acc[month] = {}
     if (!acc[month][exp.category]) acc[month][exp.category] = 0
     acc[month][exp.category] += exp.amount
