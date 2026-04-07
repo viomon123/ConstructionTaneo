@@ -8,8 +8,10 @@ function App() {
 
   useEffect(() => {
     const fetchData = async () => {
-      const { data: inv } = await supabase.from('inventory').select('*')
-      const { data: exp } = await supabase.from('expenses').select('*')
+      const { data: inv, error: invError } = await supabase.from('inventory').select('*')
+      const { data: exp, error: expError } = await supabase.from('expenses').select('*')
+      if (invError) console.error('Fetch inventory error:', invError)
+      if (expError) console.error('Fetch expenses error:', expError)
       if (inv) setInventory(inv)
       if (exp) setExpenses(exp)
     }
@@ -22,27 +24,31 @@ function App() {
       id: Date.now(),
       history: [{ date: new Date().toISOString().split('T')[0], quantity: item.quantity, price: item.price }]
     }
-    await supabase.from('inventory').insert([newItem])
-    setInventory(prev => [...prev, newItem])
+    const { error } = await supabase.from('inventory').insert([newItem])
+    if (error) console.error('Insert inventory error:', error)
+    else setInventory(prev => [...prev, newItem])
   }
 
   const updateItem = async (id, updates) => {
     const item = inventory.find(i => i.id === id)
     const newHistory = [...item.history, { date: new Date().toISOString().split('T')[0], quantity: updates.quantity || item.quantity, price: updates.price || item.price }]
     const updated = { ...item, ...updates, history: newHistory }
-    await supabase.from('inventory').update(updated).eq('id', id)
-    setInventory(prev => prev.map(i => i.id === id ? updated : i))
+    const { error } = await supabase.from('inventory').update(updated).eq('id', id)
+    if (error) console.error('Update inventory error:', error)
+    else setInventory(prev => prev.map(i => i.id === id ? updated : i))
   }
 
   const deleteItem = async (id) => {
-    await supabase.from('inventory').delete().eq('id', id)
-    setInventory(prev => prev.filter(i => i.id !== id))
+    const { error } = await supabase.from('inventory').delete().eq('id', id)
+    if (error) console.error('Delete inventory error:', error)
+    else setInventory(prev => prev.filter(i => i.id !== id))
   }
 
   const addExpense = async (expense) => {
     const newExpense = { ...expense, id: Date.now() }
-    await supabase.from('expenses').insert([newExpense])
-    setExpenses(prev => [...prev, newExpense])
+    const { error } = await supabase.from('expenses').insert([newExpense])
+    if (error) console.error('Insert expense error:', error)
+    else setExpenses(prev => [...prev, newExpense])
   }
 
   const totalInventoryCost = inventory.reduce((sum, item) => sum + (item.quantity * item.price), 0)
