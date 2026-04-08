@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
 import './App.css'
 
-const CONTRACTOR_PIN = '1234' // change this to your desired PIN
+const CONTRACTOR_PIN = '1275' // change this to your desired PIN
 
 function App() {
   const [inventory, setInventory] = useState([])
