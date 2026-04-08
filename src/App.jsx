@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabaseClient'
-
+import './App.css'
 function App() {
   const [inventory, setInventory] = useState([])
   const [expenses, setExpenses] = useState([])
