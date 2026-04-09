@@ -63,7 +63,8 @@ function App() {
         name: item.name,
         quantity_left: item.quantity,
         current_price: item.price,
-        total_purchased_cost: item.quantity * item.price
+        total_purchased_cost: item.quantity * item.price,
+        amount_paid: item.amountPaid || 0
       }])
       .select()
 
@@ -128,6 +129,24 @@ function App() {
 
     setInventory(prev => prev.map(i =>
       i.id === id ? { ...i, quantity_left: updates.quantity, current_price: updates.price, total_purchased_cost: newTotalCost } : i
+    ))
+  }
+
+  const updatePayment = async (id, amountPaid) => {
+    const item = inventory.find(i => i.id === id)
+    if (!item) return
+
+    const newAmountPaid = Math.min(amountPaid, item.total_purchased_cost)
+
+    const { error } = await supabase
+      .from('inventory')
+      .update({ amount_paid: newAmountPaid })
+      .eq('id', id)
+
+    if (error) { console.error('Update payment error:', error); return }
+
+    setInventory(prev => prev.map(i =>
+      i.id === id ? { ...i, amount_paid: newAmountPaid } : i
     ))
   }
 
@@ -201,6 +220,8 @@ function App() {
   }
 
   const totalInventoryCost = inventory.reduce((sum, item) => sum + (item.total_purchased_cost || 0), 0)
+  const totalAmountPaid = inventory.reduce((sum, item) => sum + (item.amount_paid || 0), 0)
+  const totalRemainingBalance = totalInventoryCost - totalAmountPaid
 
   const expensesByMonth = expenses.reduce((acc, exp) => {
     const month = exp.expense_date.slice(0, 7)
@@ -271,9 +292,12 @@ function App() {
             inventory={inventory}
             addItem={addItem}
             updateItem={updateItem}
+            updatePayment={updatePayment}
             deleteItem={deleteItem}
             consumeItem={consumeItem}
             totalCost={totalInventoryCost}
+            totalAmountPaid={totalAmountPaid}
+            totalRemainingBalance={totalRemainingBalance}
             todaysSummary={todaysSummary}
             isContractor={isContractor}
           />
@@ -293,10 +317,11 @@ function App() {
   )
 }
 
-function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem, totalCost, todaysSummary, isContractor }) {
-  const [form, setForm] = useState({ name: '', quantity: '', price: '' })
+function InventoryTab({ inventory, addItem, updateItem, updatePayment, deleteItem, consumeItem, totalCost, totalAmountPaid, totalRemainingBalance, todaysSummary, isContractor }) {
+  const [form, setForm] = useState({ name: '', quantity: '', price: '', amountPaid: '' })
   const [editing, setEditing] = useState(null)
   const [useQty, setUseQty] = useState({})
+  const [paymentInput, setPaymentInput] = useState({})
   const [showForm, setShowForm] = useState(false)
 
   const handleSubmit = (e) => {
@@ -305,15 +330,15 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
       updateItem(editing, { quantity: parseInt(form.quantity), price: parseFloat(form.price) })
       setEditing(null)
     } else {
-      addItem({ name: form.name, quantity: parseInt(form.quantity), price: parseFloat(form.price) })
+      addItem({ name: form.name, quantity: parseInt(form.quantity), price: parseFloat(form.price), amountPaid: parseFloat(form.amountPaid) || 0 })
     }
-    setForm({ name: '', quantity: '', price: '' })
+    setForm({ name: '', quantity: '', price: '', amountPaid: '' })
     setShowForm(false)
   }
 
   const startEdit = (item) => {
     setEditing(item.id)
-    setForm({ name: item.name, quantity: item.quantity_left, price: item.current_price })
+    setForm({ name: item.name, quantity: item.quantity_left, price: item.current_price, amountPaid: item.amount_paid || 0 })
     setShowForm(true)
   }
 
@@ -324,11 +349,28 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
     setUseQty(prev => ({ ...prev, [id]: '' }))
   }
 
+  const handlePaymentUpdate = (id) => {
+    const amount = parseFloat(paymentInput[id])
+    if (isNaN(amount) || amount < 0) return alert('Enter a valid amount')
+    updatePayment(id, amount)
+    setPaymentInput(prev => ({ ...prev, [id]: '' }))
+  }
+
   return (
     <div>
-      <div className="total-banner">
-        <span className="total-banner-label">Total Purchased Cost</span>
-        <span className="total-banner-value">₱{totalCost.toFixed(2)}</span>
+      <div className="payment-summary">
+        <div className="payment-box">
+          <span className="payment-label">Total Cost</span>
+          <span className="payment-value">₱{totalCost.toFixed(2)}</span>
+        </div>
+        <div className="payment-box">
+          <span className="payment-label">Amount Paid</span>
+          <span className="payment-value paid">₱{totalAmountPaid.toFixed(2)}</span>
+        </div>
+        <div className="payment-box">
+          <span className="payment-label">Remaining Balance</span>
+          <span className="payment-value balance">₱{totalRemainingBalance.toFixed(2)}</span>
+        </div>
       </div>
 
       {/* Only contractors can add items */}
@@ -343,67 +385,109 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
               <input type="text" placeholder="Item Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required disabled={!!editing} />
               <input type="number" placeholder="Quantity" value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} required />
               <input type="number" step="0.01" placeholder="Price per unit" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} required />
+              {!editing && <input type="number" step="0.01" placeholder="Amount paid (optional)" value={form.amountPaid} onChange={e => setForm({ ...form, amountPaid: e.target.value })} />}
               <button type="submit" className="btn btn-primary">{editing ? 'Update Item' : 'Add Item'}</button>
-              <button type="button" className="btn btn-gray" onClick={() => { setShowForm(false); setEditing(null); setForm({ name: '', quantity: '', price: '' }) }}>Cancel</button>
+              <button type="button" className="btn btn-gray" onClick={() => { setShowForm(false); setEditing(null); setForm({ name: '', quantity: '', price: '', amountPaid: '' }) }}>Cancel</button>
             </div>
           </form>
         </div>
       )}
 
-      {inventory.map(item => (
-        <div key={item.id} className="inventory-card">
-          <div className="inventory-card-header">
-            <span className="inventory-card-name">{item.name}</span>
-            <span style={{ fontSize: '13px', color: 'var(--gray-500)' }}>₱{item.current_price.toFixed(2)}/unit</span>
-          </div>
+      {inventory.map(item => {
+        const remainingBalance = (item.total_purchased_cost || 0) - (item.amount_paid || 0)
+        const paymentPercentage = item.total_purchased_cost > 0 ? ((item.amount_paid || 0) / item.total_purchased_cost) * 100 : 0
+        return (
+          <div key={item.id} className="inventory-card">
+            <div className="inventory-card-header">
+              <span className="inventory-card-name">{item.name}</span>
+              <span style={{ fontSize: '13px', color: 'var(--gray-500)' }}>₱{item.current_price.toFixed(2)}/unit</span>
+            </div>
 
-          <div className="inventory-card-stats">
-            <div className="stat-box">
-              <div className="stat-label">Qty Left</div>
-              <div className="stat-value">{item.quantity_left}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-label">Total Purchased</div>
-              <div className="stat-value">₱{(item.total_purchased_cost || 0).toFixed(2)}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-label">Added Today</div>
-              <div className="stat-value added">+{todaysSummary[item.id]?.added || 0}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-label">Used Today</div>
-              <div className="stat-value used">-{todaysSummary[item.id]?.used || 0}</div>
-            </div>
-          </div>
-
-          {/* Only contractors can use/edit/delete */}
-          {isContractor && (
-            <>
-              <div className="use-row">
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="Qty to use"
-                  value={useQty[item.id] || ''}
-                  onChange={e => setUseQty(prev => ({ ...prev, [item.id]: e.target.value }))}
-                />
-                <button className="btn btn-warning btn-sm" onClick={() => handleUse(item.id)}>Use</button>
+            <div className="inventory-card-stats">
+              <div className="stat-box">
+                <div className="stat-label">Qty Left</div>
+                <div className="stat-value">{item.quantity_left}</div>
               </div>
-              <div className="inventory-card-actions">
-                <button className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEdit(item)}>Edit</button>
-                <button className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deleteItem(item.id)}>Delete</button>
+              <div className="stat-box">
+                <div className="stat-label">Total Cost</div>
+                <div className="stat-value">₱{(item.total_purchased_cost || 0).toFixed(2)}</div>
               </div>
-            </>
-          )}
-
-          {/* Client sees a read-only notice */}
-          {!isContractor && (
-            <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--gray-400)', textAlign: 'center' }}>
-              🔒 View only
+              <div className="stat-box">
+                <div className="stat-label">Added Today</div>
+                <div className="stat-value added">+{todaysSummary[item.id]?.added || 0}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-label">Used Today</div>
+                <div className="stat-value used">-{todaysSummary[item.id]?.used || 0}</div>
+              </div>
             </div>
-          )}
-        </div>
-      ))}
+
+            {/* Payment Status Section */}
+            <div className="payment-status-card">
+              <div className="payment-status-header">Payment Status</div>
+              <div className="payment-progress-bar">
+                <div className="progress-fill" style={{ width: `${paymentPercentage}%` }}></div>
+              </div>
+              <div className="payment-details">
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Paid:</span>
+                  <span className="payment-detail-value paid">₱{(item.amount_paid || 0).toFixed(2)}</span>
+                </div>
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Remaining:</span>
+                  <span className="payment-detail-value balance">₱{remainingBalance.toFixed(2)}</span>
+                </div>
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Progress:</span>
+                  <span className="payment-detail-value">{paymentPercentage.toFixed(0)}%</span>
+                </div>
+              </div>
+
+              {/* Only contractors can update payment */}
+              {isContractor && (
+                <div className="payment-update-row">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="Add payment"
+                    value={paymentInput[item.id] || ''}
+                    onChange={e => setPaymentInput(prev => ({ ...prev, [item.id]: e.target.value }))}
+                  />
+                  <button className="btn btn-info btn-sm" onClick={() => handlePaymentUpdate(item.id)}>Record Payment</button>
+                </div>
+              )}
+            </div>
+
+            {/* Only contractors can use/edit/delete */}
+            {isContractor && (
+              <>
+                <div className="use-row">
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Qty to use"
+                    value={useQty[item.id] || ''}
+                    onChange={e => setUseQty(prev => ({ ...prev, [item.id]: e.target.value }))}
+                  />
+                  <button className="btn btn-warning btn-sm" onClick={() => handleUse(item.id)}>Use</button>
+                </div>
+                <div className="inventory-card-actions">
+                  <button className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEdit(item)}>Edit</button>
+                  <button className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deleteItem(item.id)}>Delete</button>
+                </div>
+              </>
+            )}
+
+            {/* Client sees a read-only notice */}
+            {!isContractor && (
+              <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--gray-400)', textAlign: 'center' }}>
+                🔒 View only
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -547,4 +631,3 @@ function ExpensesTab({ addExpense, expensesByMonth, isContractor }) {
 }
 
 export default App
-
