@@ -4,6 +4,19 @@ import './App.css'
 
 const CONTRACTOR_PIN = '1275' // change this to your desired PIN
 
+function isPayablesTableMissingError(err) {
+  if (!err) return false
+  const text = `${err.message || ''} ${err.details || ''} ${err.hint || ''}`.toLowerCase()
+  const status = err.status ?? err.statusCode ?? err.cause?.status
+  return (
+    status === 404 ||
+    err.code === 'PGRST205' ||
+    text.includes('schema cache') ||
+    text.includes('could not find the table') ||
+    (text.includes('relation') && text.includes('payables') && text.includes('does not exist'))
+  )
+}
+
 async function uploadReceiptToBucket(receiptFile) {
   if (!receiptFile) return null
   const fileName = `${Date.now()}-${receiptFile.name}`
@@ -26,6 +39,7 @@ function App() {
   const [showPinModal, setShowPinModal] = useState(false)
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState(false)
+  const [payablesTableMissing, setPayablesTableMissing] = useState(false)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -47,9 +61,12 @@ function App() {
       if (payError) console.error(payError)
       if (changesError) console.error(changesError)
 
+      setPayablesTableMissing(!!payError && isPayablesTableMissingError(payError))
+
       if (inv) setInventory(inv)
       if (exp) setExpenses(exp)
       if (pay) setPayables(pay)
+      else setPayables([])
       if (changes) setDailyChanges(changes)
     }
 
@@ -452,6 +469,7 @@ function App() {
             deletePayable={deletePayable}
             expensesByMonth={expensesByMonth}
             isContractor={isContractor}
+            payablesTableMissing={payablesTableMissing}
           />
         )}
         {activeTab === 'daily' && (
@@ -639,7 +657,8 @@ function ExpensesTab({
   updatePayable,
   deletePayable,
   expensesByMonth,
-  isContractor
+  isContractor,
+  payablesTableMissing
 }) {
   const [form, setForm] = useState({ category: '', amount: '', date: '' })
   const [receiptFile, setReceiptFile] = useState(null)
@@ -755,6 +774,24 @@ function ExpensesTab({
             <button className="receipt-modal-close" onClick={() => setViewingReceipt(null)}>✕</button>
             <img src={viewingReceipt} alt="Receipt" style={{ width: '100%', borderRadius: '8px' }} />
           </div>
+        </div>
+      )}
+
+      {payablesTableMissing && (
+        <div
+          className="card"
+          style={{
+            marginBottom: '18px',
+            border: '1.5px solid var(--danger)',
+            background: 'linear-gradient(180deg, #fef2f2 0%, #fff 100%)'
+          }}
+        >
+          <div style={{ fontWeight: 700, color: 'var(--danger)', marginBottom: '8px' }}>Set up the payables table in Supabase</div>
+          <p style={{ margin: 0, fontSize: '14px', color: 'var(--gray-700)', lineHeight: 1.5 }}>
+            The app is calling <code style={{ fontSize: '13px' }}>/rest/v1/payables</code> but that table does not exist in your project yet (browser shows 404).
+            In the Supabase dashboard open <strong>SQL Editor</strong>, create a new query, paste the full script from{' '}
+            <code style={{ fontSize: '13px' }}>supabase/migrations/20260410180000_create_payables.sql</code> in this repo, click <strong>Run</strong>, then reload this page.
+          </p>
         </div>
       )}
 
