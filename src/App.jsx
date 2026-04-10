@@ -660,13 +660,6 @@ function ExpensesTab({
   isContractor,
   payablesTableMissing
 }) {
-  const ATTENDANCE_KEY = 'construction_taneo_attendance_v1'
-  const toLocalISODate = (d = new Date()) => {
-    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
-    return local.toISOString().slice(0, 10)
-  }
-
-  const [activeExpenseTab, setActiveExpenseTab] = useState('payables')
   const [form, setForm] = useState({ category: '', amount: '', date: '' })
   const [receiptFile, setReceiptFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
@@ -682,20 +675,6 @@ function ExpensesTab({
   const [editingPayableId, setEditingPayableId] = useState(null)
   const [existingPayableReceiptUrl, setExistingPayableReceiptUrl] = useState(null)
   const [contributionInput, setContributionInput] = useState({})
-  const [attendanceForm, setAttendanceForm] = useState({ salary: '', person1Present: true, person2Present: true })
-  const [attendanceRecords, setAttendanceRecords] = useState(() => {
-    try {
-      const raw = localStorage.getItem(ATTENDANCE_KEY)
-      if (!raw) return []
-      const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed : []
-    } catch {
-      return []
-    }
-  })
-
-  const todayKey = toLocalISODate()
-  const todayAttendance = attendanceRecords.find((r) => r.date === todayKey)
 
   const resetForm = () => {
     setForm({ category: '', amount: '', date: '' })
@@ -787,55 +766,6 @@ function ExpensesTab({
     else setContributionInput(prev => ({ ...prev, [id]: '' }))
   }
 
-  const handleAttendanceSave = async (e) => {
-    e.preventDefault()
-    if (!isContractor) return
-    if (todayAttendance) return alert('Attendance for today is already recorded.')
-
-    const totalSalary = parseFloat(attendanceForm.salary)
-    if (isNaN(totalSalary) || totalSalary < 0) return alert('Enter a valid daily salary amount')
-
-    const p1Present = attendanceForm.person1Present
-    const p2Present = attendanceForm.person2Present
-    let p1Amount = 0
-    let p2Amount = 0
-
-    if (p1Present && p2Present) {
-      p1Amount = Math.round(totalSalary * 0.55 * 100) / 100
-      p2Amount = Math.round((totalSalary - p1Amount) * 100) / 100
-    } else if (p1Present && !p2Present) {
-      p1Amount = Math.round(totalSalary * 100) / 100
-    } else if (!p1Present && p2Present) {
-      p2Amount = Math.round(totalSalary * 100) / 100
-    }
-
-    const record = {
-      date: todayKey,
-      salary_total: Math.round(totalSalary * 100) / 100,
-      person1_present: p1Present,
-      person2_present: p2Present,
-      person1_amount: p1Amount,
-      person2_amount: p2Amount
-    }
-
-    const next = [record, ...attendanceRecords.filter(r => r.date !== todayKey)]
-    setAttendanceRecords(next)
-    localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(next))
-
-    const salaryExpenseRows = []
-    if (p1Amount > 0) salaryExpenseRows.push({ category: 'Salary - Person 1', amount: p1Amount, expense_date: todayKey, receipt_url: null })
-    if (p2Amount > 0) salaryExpenseRows.push({ category: 'Salary - Person 2', amount: p2Amount, expense_date: todayKey, receipt_url: null })
-
-    if (salaryExpenseRows.length > 0) {
-      const { data, error } = await supabase.from('expenses').insert(salaryExpenseRows).select()
-      if (error) console.error('Insert salary expense error:', error)
-      else if (data) {
-        setExpenses(prev => [...prev, ...data])
-        setAttendanceForm({ salary: '', person1Present: true, person2Present: true })
-      }
-    }
-  }
-
   return (
     <div>
       {viewingReceipt && (
@@ -865,241 +795,212 @@ function ExpensesTab({
         </div>
       )}
 
-      <div className="inner-tab-bar">
-        <button className={activeExpenseTab === 'payables' ? 'active' : ''} onClick={() => setActiveExpenseTab('payables')}>Payables</button>
-        <button className={activeExpenseTab === 'attendance' ? 'active' : ''} onClick={() => setActiveExpenseTab('attendance')}>Attendance</button>
-        <button className={activeExpenseTab === 'log' ? 'active' : ''} onClick={() => setActiveExpenseTab('log')}>Expense Log</button>
+      <div className="section-title">Balances to pay off</div>
+      <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '-6px 0 14px' }}>
+        Add what you owe, then record small payments until the balance reaches zero. Each payment also appears in your expense log below.
+      </p>
+
+      <div className="payment-summary">
+        <div className="payment-box">
+          <span className="payment-label">Total to pay</span>
+          <span className="payment-value">₱{payablesTotalDue.toFixed(2)}</span>
+        </div>
+        <div className="payment-box">
+          <span className="payment-label">Paid so far</span>
+          <span className="payment-value paid">₱{payablesTotalPaid.toFixed(2)}</span>
+        </div>
+        <div className="payment-box">
+          <span className="payment-label">Still owed</span>
+          <span className="payment-value balance">₱{Math.max(0, payablesTotalRemaining).toFixed(2)}</span>
+        </div>
       </div>
 
-      {activeExpenseTab === 'payables' && (
-        <>
-          <div className="section-title">Balances to pay off</div>
-          <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '-6px 0 14px' }}>
-            Add what you owe, then record small payments until the balance reaches zero. Each payment also appears in your expense log.
-          </p>
-
-          <div className="payment-summary">
-            <div className="payment-box">
-              <span className="payment-label">Total to pay</span>
-              <span className="payment-value">₱{payablesTotalDue.toFixed(2)}</span>
-            </div>
-            <div className="payment-box">
-              <span className="payment-label">Paid so far</span>
-              <span className="payment-value paid">₱{payablesTotalPaid.toFixed(2)}</span>
-            </div>
-            <div className="payment-box">
-              <span className="payment-label">Still owed</span>
-              <span className="payment-value balance">₱{Math.max(0, payablesTotalRemaining).toFixed(2)}</span>
-            </div>
-          </div>
-
-          {isContractor && !showPayableForm && (
-            <button className="btn btn-success" style={{ marginBottom: '16px' }} onClick={() => { setEditingPayableId(null); setExistingPayableReceiptUrl(null); setShowPayableForm(true) }}>
-              + New balance to pay off
-            </button>
-          )}
-
-          {isContractor && showPayableForm && (
-            <div className="card" style={{ marginBottom: '20px' }}>
-              <form onSubmit={handlePayableSubmit}>
-                <div className="form-group">
-                  <input type="text" placeholder="What this is for (e.g. Cement delivery, Labor week 2)" value={payableForm.title} onChange={e => setPayableForm({ ...payableForm, title: e.target.value })} required />
-                  <input type="number" step="0.01" min="0" placeholder="Full amount you need to pay (P)" value={payableForm.totalDue} onChange={e => setPayableForm({ ...payableForm, totalDue: e.target.value })} required />
-                  <label className="receipt-upload-label">
-                    📎 {payableReceiptFile ? payableReceiptFile.name : editingPayableId ? 'Replace bill photo (optional)' : 'Bill / quote photo (optional)'}
-                    <input type="file" accept="image/*" capture="environment" onChange={handlePayableFileChange} style={{ display: 'none' }} />
-                  </label>
-                  {payablePreviewUrl && (
-                    <img src={payablePreviewUrl} alt="Preview" style={{ width: '100%', borderRadius: '8px', marginTop: '4px' }} />
-                  )}
-                  {editingPayableId && existingPayableReceiptUrl && !payablePreviewUrl && (
-                    <div style={{ marginTop: '8px' }}>
-                      <div style={{ fontSize: '12px', color: 'var(--gray-500)', marginBottom: '6px' }}>Current bill image</div>
-                      <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(existingPayableReceiptUrl)}>🧾 View</button>
-                    </div>
-                  )}
-                  <button type="submit" className="btn btn-primary">{editingPayableId ? 'Update balance' : 'Save balance'}</button>
-                  <button type="button" className="btn btn-gray" onClick={resetPayableForm}>Cancel</button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {payables.length === 0 && (
-            <div className="empty-state" style={{ marginBottom: '24px' }}>No balances yet. Add one when you owe a fixed amount you will pay in parts.</div>
-          )}
-
-          {payables.map((p) => {
-            const totalDue = Number(p.total_due) || 0
-            const paid = Number(p.amount_paid) || 0
-            const remaining = Math.round((totalDue - paid) * 100) / 100
-            const pct = totalDue > 0 ? Math.min(100, (paid / totalDue) * 100) : 0
-            return (
-              <div key={p.id} className="inventory-card" style={{ marginBottom: '12px' }}>
-                <div className="inventory-card-header">
-                  <span className="inventory-card-name">{p.title}</span>
-                  {p.receipt_url && (
-                    <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(p.receipt_url)}>🧾</button>
-                  )}
-                </div>
-                <div className="payment-status-card" style={{ marginTop: '8px' }}>
-                  <div className="payment-progress-bar">
-                    <div className="progress-fill" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="payment-details">
-                    <div className="payment-detail-row"><span className="payment-detail-label">Full amount:</span><span className="payment-detail-value">₱{totalDue.toFixed(2)}</span></div>
-                    <div className="payment-detail-row"><span className="payment-detail-label">Paid:</span><span className="payment-detail-value paid">₱{paid.toFixed(2)}</span></div>
-                    <div className="payment-detail-row"><span className="payment-detail-label">Left to pay:</span><span className="payment-detail-value balance">₱{Math.max(0, remaining).toFixed(2)}</span></div>
-                  </div>
-                  {isContractor && remaining > 0 && (
-                    <div className="payment-update-row">
-                      <input type="number" step="0.01" min="0.01" placeholder="Pay now (P)" value={contributionInput[p.id] || ''} onChange={e => setContributionInput(prev => ({ ...prev, [p.id]: e.target.value }))} />
-                      <button type="button" className="btn btn-info btn-sm" onClick={() => handleContribute(p.id)}>Record payment</button>
-                    </div>
-                  )}
-                  {isContractor && remaining <= 0 && <div style={{ fontSize: '13px', color: 'var(--success, #15803d)', marginTop: '8px', fontWeight: 600 }}>Fully paid</div>}
-                  {isContractor && (
-                    <div className="inventory-card-actions" style={{ marginTop: '12px' }}>
-                      <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEditPayable(p)}>Edit</button>
-                      <button type="button" className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deletePayable(p.id)}>Delete</button>
-                    </div>
-                  )}
-                </div>
-                {!isContractor && <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--gray-400)', textAlign: 'center' }}>🔒 View only</div>}
-              </div>
-            )
-          })}
-        </>
+      {isContractor && !showPayableForm && (
+        <button
+          className="btn btn-success"
+          style={{ marginBottom: '16px' }}
+          onClick={() => { setEditingPayableId(null); setExistingPayableReceiptUrl(null); setShowPayableForm(true) }}
+        >
+          + New balance to pay off
+        </button>
       )}
 
-      {activeExpenseTab === 'attendance' && (
-        <>
-          <div className="section-title">Daily attendance and salary split</div>
-          <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '-6px 0 14px' }}>
-            Person 1 = 55%, Person 2 = 45%. If one is absent, the present person receives 100% for that day.
-          </p>
-
-          <div className="card" style={{ marginBottom: '14px' }}>
-            <div style={{ fontWeight: 700, marginBottom: '10px' }}>Today: {todayKey}</div>
-            {todayAttendance ? (
-              <div className="attendance-summary">
-                <div className="payment-detail-row"><span className="payment-detail-label">Total salary:</span><span className="payment-detail-value">₱{Number(todayAttendance.salary_total).toFixed(2)}</span></div>
-                <div className="payment-detail-row"><span className="payment-detail-label">Person 1:</span><span className="payment-detail-value">{todayAttendance.person1_present ? `Present - ₱${Number(todayAttendance.person1_amount).toFixed(2)}` : 'Absent - ₱0.00'}</span></div>
-                <div className="payment-detail-row"><span className="payment-detail-label">Person 2:</span><span className="payment-detail-value">{todayAttendance.person2_present ? `Present - ₱${Number(todayAttendance.person2_amount).toFixed(2)}` : 'Absent - ₱0.00'}</span></div>
-                <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--gray-500)' }}>Attendance is locked for today to prevent multiple day markings.</div>
-              </div>
-            ) : (
-              <form onSubmit={handleAttendanceSave}>
-                <div className="form-group">
-                  <input type="number" step="0.01" min="0" placeholder="Total salary for today (P)" value={attendanceForm.salary} onChange={e => setAttendanceForm(prev => ({ ...prev, salary: e.target.value }))} required />
-                  <label className="attendance-check">
-                    <input type="checkbox" checked={attendanceForm.person1Present} onChange={e => setAttendanceForm(prev => ({ ...prev, person1Present: e.target.checked }))} />
-                    <span>Person 1 present (55% if both present)</span>
-                  </label>
-                  <label className="attendance-check">
-                    <input type="checkbox" checked={attendanceForm.person2Present} onChange={e => setAttendanceForm(prev => ({ ...prev, person2Present: e.target.checked }))} />
-                    <span>Person 2 present (45% if both present)</span>
-                  </label>
-                  {isContractor ? (
-                    <button type="submit" className="btn btn-primary">Save today's attendance</button>
-                  ) : (
-                    <div style={{ fontSize: '12px', color: 'var(--gray-400)' }}>🔒 View only</div>
-                  )}
+      {isContractor && showPayableForm && (
+        <div className="card" style={{ marginBottom: '20px' }}>
+          <form onSubmit={handlePayableSubmit}>
+            <div className="form-group">
+              <input
+                type="text"
+                placeholder="What this is for (e.g. Cement delivery, Labor week 2)"
+                value={payableForm.title}
+                onChange={e => setPayableForm({ ...payableForm, title: e.target.value })}
+                required
+              />
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="Full amount you need to pay (₱)"
+                value={payableForm.totalDue}
+                onChange={e => setPayableForm({ ...payableForm, totalDue: e.target.value })}
+                required
+              />
+              <label className="receipt-upload-label">
+                📎 {payableReceiptFile ? payableReceiptFile.name : editingPayableId ? 'Replace bill photo (optional)' : 'Bill / quote photo (optional)'}
+                <input type="file" accept="image/*" capture="environment" onChange={handlePayableFileChange} style={{ display: 'none' }} />
+              </label>
+              {payablePreviewUrl && (
+                <img src={payablePreviewUrl} alt="Preview" style={{ width: '100%', borderRadius: '8px', marginTop: '4px' }} />
+              )}
+              {editingPayableId && existingPayableReceiptUrl && !payablePreviewUrl && (
+                <div style={{ marginTop: '8px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--gray-500)', marginBottom: '6px' }}>Current bill image</div>
+                  <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(existingPayableReceiptUrl)}>🧾 View</button>
                 </div>
-              </form>
-            )}
-          </div>
-
-          <div className="month-card">
-            <div className="month-title">Recent attendance</div>
-            {attendanceRecords.length === 0 ? (
-              <div className="empty-state" style={{ padding: '12px 0' }}>No attendance records yet.</div>
-            ) : (
-              attendanceRecords.slice(0, 10).map((rec) => (
-                <div key={rec.date} className="expense-row">
-                  <div>
-                    <div>{rec.date}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--gray-500)' }}>
-                      P1: {rec.person1_present ? `Present (₱${Number(rec.person1_amount).toFixed(2)})` : 'Absent'} | P2: {rec.person2_present ? `Present (₱${Number(rec.person2_amount).toFixed(2)})` : 'Absent'}
-                    </div>
-                  </div>
-                  <div>₱{Number(rec.salary_total).toFixed(2)}</div>
-                </div>
-              ))
-            )}
-          </div>
-        </>
+              )}
+              <button type="submit" className="btn btn-primary">{editingPayableId ? 'Update balance' : 'Save balance'}</button>
+              <button type="button" className="btn btn-gray" onClick={resetPayableForm}>Cancel</button>
+            </div>
+          </form>
+        </div>
       )}
 
-      {activeExpenseTab === 'log' && (
-        <>
-          <div className="section-title">Expense log</div>
-          <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '-6px 0 14px' }}>
-            One-off costs and each partial payment above (listed as "Payment: ...").
-          </p>
+      {payables.length === 0 && (
+        <div className="empty-state" style={{ marginBottom: '24px' }}>No balances yet. Add one when you owe a fixed amount you’ll pay in parts.</div>
+      )}
 
-          {isContractor && !showForm && (
-            <button className="btn btn-success" style={{ marginBottom: '16px' }} onClick={() => { setEditingId(null); setExistingReceiptUrl(null); setShowForm(true) }}>+ Add expense</button>
-          )}
-
-          {isContractor && showForm && (
-            <div className="card">
-              <form onSubmit={handleSubmit}>
-                <div className="form-group">
-                  <input type="text" placeholder="Category (e.g. Labor, Materials)" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} required />
-                  <input type="number" step="0.01" placeholder="Amount" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} required />
-                  <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
-                  <label className="receipt-upload-label">
-                    📎 {receiptFile ? receiptFile.name : editingId ? 'Replace receipt (optional)' : 'Attach Receipt Photo'}
-                    <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} style={{ display: 'none' }} />
-                  </label>
-                  {previewUrl && <img src={previewUrl} alt="Preview" style={{ width: '100%', borderRadius: '8px', marginTop: '4px' }} />}
-                  {editingId && existingReceiptUrl && !previewUrl && (
-                    <div style={{ marginTop: '8px' }}>
-                      <div style={{ fontSize: '12px', color: 'var(--gray-500)', marginBottom: '6px' }}>Current receipt</div>
-                      <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(existingReceiptUrl)} style={{ marginRight: '8px' }}>🧾 View</button>
-                    </div>
-                  )}
-                  <button type="submit" className="btn btn-primary">{editingId ? 'Update Expense' : 'Add Expense'}</button>
-                  <button type="button" className="btn btn-gray" onClick={resetForm}>Cancel</button>
-                </div>
-              </form>
+      {payables.map((p) => {
+        const totalDue = Number(p.total_due) || 0
+        const paid = Number(p.amount_paid) || 0
+        const remaining = Math.round((totalDue - paid) * 100) / 100
+        const pct = totalDue > 0 ? Math.min(100, (paid / totalDue) * 100) : 0
+        return (
+          <div key={p.id} className="inventory-card" style={{ marginBottom: '12px' }}>
+            <div className="inventory-card-header">
+              <span className="inventory-card-name">{p.title}</span>
+              {p.receipt_url && (
+                <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(p.receipt_url)}>🧾</button>
+              )}
             </div>
-          )}
-
-          {Object.keys(expensesByMonth).length === 0 && <div className="empty-state">No expenses in the log yet.</div>}
-
-          {Object.entries(expensesByMonth).map(([month, exps]) => (
-            <div key={month} className="month-card">
-              <div className="month-title">{month}</div>
-              {exps.map((exp) => (
-                <div key={exp.id} className="expense-row">
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div>{exp.category}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--gray-400)' }}>{exp.expense_date}</div>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span>₱{exp.amount.toFixed(2)}</span>
-                      {exp.receipt_url && <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(exp.receipt_url)}>🧾</button>}
-                    </div>
-                    {isContractor && (
-                      <div className="inventory-card-actions" style={{ width: '100%', maxWidth: '220px' }}>
-                        <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEdit(exp)}>Edit</button>
-                        <button type="button" className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deleteExpense(exp.id)}>Delete</button>
-                      </div>
-                    )}
-                  </div>
+            <div className="payment-status-card" style={{ marginTop: '8px' }}>
+              <div className="payment-progress-bar">
+                <div className="progress-fill" style={{ width: `${pct}%` }} />
+              </div>
+              <div className="payment-details">
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Full amount:</span>
+                  <span className="payment-detail-value">₱{totalDue.toFixed(2)}</span>
                 </div>
-              ))}
-              <div className="expense-total">
-                <span>Total</span>
-                <span>₱{exps.reduce((s, e) => s + e.amount, 0).toFixed(2)}</span>
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Paid:</span>
+                  <span className="payment-detail-value paid">₱{paid.toFixed(2)}</span>
+                </div>
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Left to pay:</span>
+                  <span className="payment-detail-value balance">₱{Math.max(0, remaining).toFixed(2)}</span>
+                </div>
+              </div>
+              {isContractor && remaining > 0 && (
+                <div className="payment-update-row">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    placeholder="Pay now (₱)"
+                    value={contributionInput[p.id] || ''}
+                    onChange={e => setContributionInput(prev => ({ ...prev, [p.id]: e.target.value }))}
+                  />
+                  <button type="button" className="btn btn-info btn-sm" onClick={() => handleContribute(p.id)}>Record payment</button>
+                </div>
+              )}
+              {isContractor && remaining <= 0 && (
+                <div style={{ fontSize: '13px', color: 'var(--success, #15803d)', marginTop: '8px', fontWeight: 600 }}>Fully paid</div>
+              )}
+              {isContractor && (
+                <div className="inventory-card-actions" style={{ marginTop: '12px' }}>
+                  <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEditPayable(p)}>Edit</button>
+                  <button type="button" className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deletePayable(p.id)}>Delete</button>
+                </div>
+              )}
+            </div>
+            {!isContractor && (
+              <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--gray-400)', textAlign: 'center' }}>🔒 View only</div>
+            )}
+          </div>
+        )
+      })}
+
+      <div className="section-title" style={{ marginTop: '28px' }}>Expense log</div>
+      <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '-6px 0 14px' }}>
+        One-off costs and each partial payment above (listed as “Payment: …”).
+      </p>
+
+      {isContractor && !showForm && (
+        <button className="btn btn-success" style={{ marginBottom: '16px' }} onClick={() => { setEditingId(null); setExistingReceiptUrl(null); setShowForm(true) }}>+ Add expense</button>
+      )}
+
+      {isContractor && showForm && (
+        <div className="card">
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <input type="text" placeholder="Category (e.g. Labor, Materials)" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} required />
+              <input type="number" step="0.01" placeholder="Amount" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} required />
+              <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
+              <label className="receipt-upload-label">
+                📎 {receiptFile ? receiptFile.name : editingId ? 'Replace receipt (optional)' : 'Attach Receipt Photo'}
+                <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} style={{ display: 'none' }} />
+              </label>
+              {previewUrl && (
+                <img src={previewUrl} alt="Preview" style={{ width: '100%', borderRadius: '8px', marginTop: '4px' }} />
+              )}
+              {editingId && existingReceiptUrl && !previewUrl && (
+                <div style={{ marginTop: '8px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--gray-500)', marginBottom: '6px' }}>Current receipt</div>
+                  <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(existingReceiptUrl)} style={{ marginRight: '8px' }}>🧾 View</button>
+                </div>
+              )}
+              <button type="submit" className="btn btn-primary">{editingId ? 'Update Expense' : 'Add Expense'}</button>
+              <button type="button" className="btn btn-gray" onClick={resetForm}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {Object.keys(expensesByMonth).length === 0 && (
+        <div className="empty-state">No expenses in the log yet.</div>
+      )}
+
+      {Object.entries(expensesByMonth).map(([month, exps]) => (
+        <div key={month} className="month-card">
+          <div className="month-title">{month}</div>
+          {exps.map((exp) => (
+            <div key={exp.id} className="expense-row">
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div>{exp.category}</div>
+                <div style={{ fontSize: '12px', color: 'var(--gray-400)' }}>{exp.expense_date}</div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>₱{exp.amount.toFixed(2)}</span>
+                  {exp.receipt_url && (
+                    <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(exp.receipt_url)}>🧾</button>
+                  )}
+                </div>
+                {isContractor && (
+                  <div className="inventory-card-actions" style={{ width: '100%', maxWidth: '220px' }}>
+                    <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEdit(exp)}>Edit</button>
+                    <button type="button" className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deleteExpense(exp.id)}>Delete</button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
-        </>
-      )}
+          <div className="expense-total">
+            <span>Total</span>
+            <span>₱{exps.reduce((s, e) => s + e.amount, 0).toFixed(2)}</span>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
