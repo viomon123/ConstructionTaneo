@@ -4,22 +4,9 @@ import './App.css'
 
 const CONTRACTOR_PIN = '1275' // change this to your desired PIN
 
-async function uploadReceiptToBucket(receiptFile) {
-  if (!receiptFile) return null
-  const fileName = `${Date.now()}-${receiptFile.name}`
-  const { error: uploadError } = await supabase.storage.from('receipts').upload(fileName, receiptFile)
-  if (uploadError) {
-    console.error('Upload error:', uploadError)
-    return null
-  }
-  const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(fileName)
-  return urlData.publicUrl
-}
-
 function App() {
   const [inventory, setInventory] = useState([])
   const [expenses, setExpenses] = useState([])
-  const [payables, setPayables] = useState([])
   const [dailyChanges, setDailyChanges] = useState([])
   const [activeTab, setActiveTab] = useState('inventory')
   const [isContractor, setIsContractor] = useState(false)
@@ -31,7 +18,6 @@ function App() {
     const fetchData = async () => {
       const { data: inv, error: invError } = await supabase.from('inventory').select('*')
       const { data: exp, error: expError } = await supabase.from('expenses').select('*')
-      const { data: pay, error: payError } = await supabase.from('payables').select('*').order('created_at', { ascending: false })
 
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
@@ -44,12 +30,10 @@ function App() {
 
       if (invError) console.error(invError)
       if (expError) console.error(expError)
-      if (payError) console.error(payError)
       if (changesError) console.error(changesError)
 
       if (inv) setInventory(inv)
       if (exp) setExpenses(exp)
-      if (pay) setPayables(pay)
       if (changes) setDailyChanges(changes)
     }
 
@@ -80,7 +64,7 @@ function App() {
         quantity_left: item.quantity,
         current_price: item.price,
         total_purchased_cost: item.quantity * item.price,
-        amount_paid: 0
+        amount_paid: item.amountPaid || 0
       }])
       .select()
 
@@ -148,6 +132,24 @@ function App() {
     ))
   }
 
+  const updatePayment = async (id, amountPaid) => {
+    const item = inventory.find(i => i.id === id)
+    if (!item) return
+
+    const newAmountPaid = Math.min(amountPaid, item.total_purchased_cost)
+
+    const { error } = await supabase
+      .from('inventory')
+      .update({ amount_paid: newAmountPaid })
+      .eq('id', id)
+
+    if (error) { console.error('Update payment error:', error); return }
+
+    setInventory(prev => prev.map(i =>
+      i.id === id ? { ...i, amount_paid: newAmountPaid } : i
+    ))
+  }
+
   const consumeItem = async (id, quantityUsed) => {
     const item = inventory.find(i => i.id === id)
     const newQty = item.quantity_left - quantityUsed
@@ -187,7 +189,21 @@ function App() {
   }
 
   const addExpense = async (expense, receiptFile) => {
-    const receipt_url = await uploadReceiptToBucket(receiptFile)
+    let receipt_url = null
+
+    if (receiptFile) {
+      const fileName = `${Date.now()}-${receiptFile.name}`
+      const { error: uploadError } = await supabase.storage
+        .from('receipts')
+        .upload(fileName, receiptFile)
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError)
+      } else {
+        const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(fileName)
+        receipt_url = urlData.publicUrl
+      }
+    }
 
     const { data, error } = await supabase
       .from('expenses')
@@ -209,105 +225,6 @@ function App() {
     if (!segment) return
     const { error } = await supabase.storage.from('receipts').remove([decodeURIComponent(segment)])
     if (error) console.error('Storage remove receipt:', error)
-  }
-
-  const addPayable = async (payload, receiptFile) => {
-    const receipt_url = await uploadReceiptToBucket(receiptFile)
-    const total_due = Math.max(0, payload.totalDue)
-
-    const { data, error } = await supabase
-      .from('payables')
-      .insert([{
-        title: payload.title,
-        total_due,
-        amount_paid: 0,
-        receipt_url
-      }])
-      .select()
-
-    if (error) { console.error('Insert payable error:', error); return }
-    if (data?.[0]) setPayables(prev => [data[0], ...prev])
-  }
-
-  const contributeToPayable = async (id, rawAmount) => {
-    const amount = parseFloat(rawAmount)
-    if (isNaN(amount) || amount <= 0) return { ok: false, message: 'Enter a valid amount' }
-
-    const p = payables.find(x => x.id === id)
-    if (!p) return { ok: false, message: 'Not found' }
-
-    const totalDue = Number(p.total_due) || 0
-    const paid = Number(p.amount_paid) || 0
-    const remaining = Math.round((totalDue - paid) * 100) / 100
-    if (remaining <= 0) return { ok: false, message: 'This is already fully paid' }
-
-    const add = Math.min(Math.round(amount * 100) / 100, remaining)
-    const newPaid = Math.round((paid + add) * 100) / 100
-
-    const { error } = await supabase
-      .from('payables')
-      .update({ amount_paid: newPaid })
-      .eq('id', id)
-
-    if (error) { console.error('Contribute payable error:', error); return { ok: false, message: 'Could not save' } }
-
-    setPayables(prev => prev.map(x => (x.id === id ? { ...x, amount_paid: newPaid } : x)))
-
-    const expense_date = new Date().toLocaleDateString('en-CA')
-    const { data: expData, error: expError } = await supabase
-      .from('expenses')
-      .insert([{
-        category: `Payment: ${p.title}`,
-        amount: add,
-        expense_date,
-        receipt_url: null
-      }])
-      .select()
-
-    if (expError) console.error('Expense from contribution error:', expError)
-    else if (expData?.[0]) setExpenses(prev => [...prev, expData[0]])
-
-    return { ok: true }
-  }
-
-  const updatePayable = async (id, payload, receiptFile) => {
-    const existing = payables.find(p => p.id === id)
-    if (!existing) return
-
-    let receipt_url
-    if (receiptFile) {
-      const uploaded = await uploadReceiptToBucket(receiptFile)
-      if (uploaded) {
-        if (existing.receipt_url) await removeReceiptFromStorage(existing.receipt_url)
-        receipt_url = uploaded
-      }
-    }
-
-    const total_due = Math.max(Number(payload.totalDue) || 0, Number(existing.amount_paid) || 0)
-
-    const row = {
-      title: payload.title,
-      total_due
-    }
-    if (receipt_url !== undefined) row.receipt_url = receipt_url
-
-    const { data, error } = await supabase
-      .from('payables')
-      .update(row)
-      .eq('id', id)
-      .select()
-
-    if (error) { console.error('Update payable error:', error); return }
-    const updated = data?.[0]
-    if (updated) setPayables(prev => prev.map(p => (p.id === id ? updated : p)))
-  }
-
-  const deletePayable = async (id) => {
-    const row = payables.find(p => p.id === id)
-    if (row?.receipt_url) await removeReceiptFromStorage(row.receipt_url)
-    const { error } = await supabase.from('payables').delete().eq('id', id)
-    if (error) { console.error('Delete payable error:', error); return }
-    setPayables(prev => prev.filter(p => p.id !== id))
   }
 
   const updateExpense = async (id, expense, receiptFile) => {
@@ -356,10 +273,8 @@ function App() {
   }
 
   const totalInventoryCost = inventory.reduce((sum, item) => sum + (item.total_purchased_cost || 0), 0)
-
-  const payablesTotalDue = payables.reduce((s, p) => s + (Number(p.total_due) || 0), 0)
-  const payablesTotalPaid = payables.reduce((s, p) => s + (Number(p.amount_paid) || 0), 0)
-  const payablesTotalRemaining = Math.round((payablesTotalDue - payablesTotalPaid) * 100) / 100
+  const totalAmountPaid = inventory.reduce((sum, item) => sum + (item.amount_paid || 0), 0)
+  const totalRemainingBalance = totalInventoryCost - totalAmountPaid
 
   const expensesByMonth = expenses.reduce((acc, exp) => {
     const month = exp.expense_date.slice(0, 7)
@@ -430,9 +345,12 @@ function App() {
             inventory={inventory}
             addItem={addItem}
             updateItem={updateItem}
+            updatePayment={updatePayment}
             deleteItem={deleteItem}
             consumeItem={consumeItem}
             totalCost={totalInventoryCost}
+            totalAmountPaid={totalAmountPaid}
+            totalRemainingBalance={totalRemainingBalance}
             todaysSummary={todaysSummary}
             isContractor={isContractor}
           />
@@ -442,14 +360,6 @@ function App() {
             addExpense={addExpense}
             updateExpense={updateExpense}
             deleteExpense={deleteExpense}
-            payables={payables}
-            payablesTotalDue={payablesTotalDue}
-            payablesTotalPaid={payablesTotalPaid}
-            payablesTotalRemaining={payablesTotalRemaining}
-            addPayable={addPayable}
-            contributeToPayable={contributeToPayable}
-            updatePayable={updatePayable}
-            deletePayable={deletePayable}
             expensesByMonth={expensesByMonth}
             isContractor={isContractor}
           />
@@ -462,10 +372,11 @@ function App() {
   )
 }
 
-function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem, totalCost, todaysSummary, isContractor }) {
-  const [form, setForm] = useState({ name: '', quantity: '', price: '' })
+function InventoryTab({ inventory, addItem, updateItem, updatePayment, deleteItem, consumeItem, totalCost, totalAmountPaid, totalRemainingBalance, todaysSummary, isContractor }) {
+  const [form, setForm] = useState({ name: '', quantity: '', price: '', amountPaid: '' })
   const [editing, setEditing] = useState(null)
   const [useQty, setUseQty] = useState({})
+  const [paymentInput, setPaymentInput] = useState({})
   const [showForm, setShowForm] = useState(false)
 
   const handleSubmit = (e) => {
@@ -474,15 +385,15 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
       updateItem(editing, { quantity: parseInt(form.quantity), price: parseFloat(form.price) })
       setEditing(null)
     } else {
-      addItem({ name: form.name, quantity: parseInt(form.quantity), price: parseFloat(form.price) })
+      addItem({ name: form.name, quantity: parseInt(form.quantity), price: parseFloat(form.price), amountPaid: parseFloat(form.amountPaid) || 0 })
     }
-    setForm({ name: '', quantity: '', price: '' })
+    setForm({ name: '', quantity: '', price: '', amountPaid: '' })
     setShowForm(false)
   }
 
   const startEdit = (item) => {
     setEditing(item.id)
-    setForm({ name: item.name, quantity: item.quantity_left, price: item.current_price })
+    setForm({ name: item.name, quantity: item.quantity_left, price: item.current_price, amountPaid: item.amount_paid || 0 })
     setShowForm(true)
   }
 
@@ -493,12 +404,27 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
     setUseQty(prev => ({ ...prev, [id]: '' }))
   }
 
+  const handlePaymentUpdate = (id) => {
+    const amount = parseFloat(paymentInput[id])
+    if (isNaN(amount) || amount < 0) return alert('Enter a valid amount')
+    updatePayment(id, amount)
+    setPaymentInput(prev => ({ ...prev, [id]: '' }))
+  }
+
   return (
     <div>
       <div className="payment-summary">
-        <div className="payment-box" style={{ flex: '1 1 100%', maxWidth: '100%' }}>
-          <span className="payment-label">Total inventory value</span>
+        <div className="payment-box">
+          <span className="payment-label">Total Cost</span>
           <span className="payment-value">₱{totalCost.toFixed(2)}</span>
+        </div>
+        <div className="payment-box">
+          <span className="payment-label">Amount Paid</span>
+          <span className="payment-value paid">₱{totalAmountPaid.toFixed(2)}</span>
+        </div>
+        <div className="payment-box">
+          <span className="payment-label">Remaining Balance</span>
+          <span className="payment-value balance">₱{totalRemainingBalance.toFixed(2)}</span>
         </div>
       </div>
 
@@ -514,14 +440,18 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
               <input type="text" placeholder="Item Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required disabled={!!editing} />
               <input type="number" placeholder="Quantity" value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} required />
               <input type="number" step="0.01" placeholder="Price per unit" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} required />
+              {!editing && <input type="number" step="0.01" placeholder="Amount paid (optional)" value={form.amountPaid} onChange={e => setForm({ ...form, amountPaid: e.target.value })} />}
               <button type="submit" className="btn btn-primary">{editing ? 'Update Item' : 'Add Item'}</button>
-              <button type="button" className="btn btn-gray" onClick={() => { setShowForm(false); setEditing(null); setForm({ name: '', quantity: '', price: '' }) }}>Cancel</button>
+              <button type="button" className="btn btn-gray" onClick={() => { setShowForm(false); setEditing(null); setForm({ name: '', quantity: '', price: '', amountPaid: '' }) }}>Cancel</button>
             </div>
           </form>
         </div>
       )}
 
-      {inventory.map(item => (
+      {inventory.map(item => {
+        const remainingBalance = (item.total_purchased_cost || 0) - (item.amount_paid || 0)
+        const paymentPercentage = item.total_purchased_cost > 0 ? ((item.amount_paid || 0) / item.total_purchased_cost) * 100 : 0
+        return (
           <div key={item.id} className="inventory-card">
             <div className="inventory-card-header">
               <span className="inventory-card-name">{item.name}</span>
@@ -545,6 +475,43 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
                 <div className="stat-label">Used Today</div>
                 <div className="stat-value used">-{todaysSummary[item.id]?.used || 0}</div>
               </div>
+            </div>
+
+            {/* Payment Status Section */}
+            <div className="payment-status-card">
+              <div className="payment-status-header">Payment Status</div>
+              <div className="payment-progress-bar">
+                <div className="progress-fill" style={{ width: `${paymentPercentage}%` }}></div>
+              </div>
+              <div className="payment-details">
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Paid:</span>
+                  <span className="payment-detail-value paid">₱{(item.amount_paid || 0).toFixed(2)}</span>
+                </div>
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Remaining:</span>
+                  <span className="payment-detail-value balance">₱{remainingBalance.toFixed(2)}</span>
+                </div>
+                <div className="payment-detail-row">
+                  <span className="payment-detail-label">Progress:</span>
+                  <span className="payment-detail-value">{paymentPercentage.toFixed(0)}%</span>
+                </div>
+              </div>
+
+              {/* Only contractors can update payment */}
+              {isContractor && (
+                <div className="payment-update-row">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="Add payment"
+                    value={paymentInput[item.id] || ''}
+                    onChange={e => setPaymentInput(prev => ({ ...prev, [item.id]: e.target.value }))}
+                  />
+                  <button className="btn btn-info btn-sm" onClick={() => handlePaymentUpdate(item.id)}>Record Payment</button>
+                </div>
+              )}
             </div>
 
             {/* Only contractors can use/edit/delete */}
@@ -574,7 +541,8 @@ function InventoryTab({ inventory, addItem, updateItem, deleteItem, consumeItem,
               </div>
             )}
           </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -626,21 +594,7 @@ function DailyLogTab({ dailyChanges }) {
   )
 }
 
-function ExpensesTab({
-  addExpense,
-  updateExpense,
-  deleteExpense,
-  payables,
-  payablesTotalDue,
-  payablesTotalPaid,
-  payablesTotalRemaining,
-  addPayable,
-  contributeToPayable,
-  updatePayable,
-  deletePayable,
-  expensesByMonth,
-  isContractor
-}) {
+function ExpensesTab({ addExpense, updateExpense, deleteExpense, expensesByMonth, isContractor }) {
   const [form, setForm] = useState({ category: '', amount: '', date: '' })
   const [receiptFile, setReceiptFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
@@ -648,14 +602,6 @@ function ExpensesTab({
   const [editingId, setEditingId] = useState(null)
   const [existingReceiptUrl, setExistingReceiptUrl] = useState(null)
   const [viewingReceipt, setViewingReceipt] = useState(null)
-
-  const [payableForm, setPayableForm] = useState({ title: '', totalDue: '' })
-  const [payableReceiptFile, setPayableReceiptFile] = useState(null)
-  const [payablePreviewUrl, setPayablePreviewUrl] = useState(null)
-  const [showPayableForm, setShowPayableForm] = useState(false)
-  const [editingPayableId, setEditingPayableId] = useState(null)
-  const [existingPayableReceiptUrl, setExistingPayableReceiptUrl] = useState(null)
-  const [contributionInput, setContributionInput] = useState({})
 
   const resetForm = () => {
     setForm({ category: '', amount: '', date: '' })
@@ -667,30 +613,12 @@ function ExpensesTab({
     setShowForm(false)
   }
 
-  const resetPayableForm = () => {
-    setPayableForm({ title: '', totalDue: '' })
-    setPayableReceiptFile(null)
-    if (payablePreviewUrl) URL.revokeObjectURL(payablePreviewUrl)
-    setPayablePreviewUrl(null)
-    setEditingPayableId(null)
-    setExistingPayableReceiptUrl(null)
-    setShowPayableForm(false)
-  }
-
   const handleFileChange = (e) => {
     const file = e.target.files[0]
     if (!file) return
     setReceiptFile(file)
     if (previewUrl) URL.revokeObjectURL(previewUrl)
     setPreviewUrl(URL.createObjectURL(file))
-  }
-
-  const handlePayableFileChange = (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-    setPayableReceiptFile(file)
-    if (payablePreviewUrl) URL.revokeObjectURL(payablePreviewUrl)
-    setPayablePreviewUrl(URL.createObjectURL(file))
   }
 
   const startEdit = (exp) => {
@@ -707,16 +635,6 @@ function ExpensesTab({
     setShowForm(true)
   }
 
-  const startEditPayable = (p) => {
-    setEditingPayableId(p.id)
-    setPayableForm({ title: p.title, totalDue: String(p.total_due) })
-    setPayableReceiptFile(null)
-    if (payablePreviewUrl) URL.revokeObjectURL(payablePreviewUrl)
-    setPayablePreviewUrl(null)
-    setExistingPayableReceiptUrl(p.receipt_url || null)
-    setShowPayableForm(true)
-  }
-
   const handleSubmit = (e) => {
     e.preventDefault()
     const payload = { category: form.category, amount: parseFloat(form.amount), date: form.date }
@@ -726,25 +644,6 @@ function ExpensesTab({
       addExpense(payload, receiptFile)
     }
     resetForm()
-  }
-
-  const handlePayableSubmit = (e) => {
-    e.preventDefault()
-    const totalDue = parseFloat(payableForm.totalDue)
-    if (isNaN(totalDue) || totalDue < 0) return alert('Enter a valid total amount')
-    const payload = { title: payableForm.title, totalDue }
-    if (editingPayableId) {
-      updatePayable(editingPayableId, payload, payableReceiptFile)
-    } else {
-      addPayable(payload, payableReceiptFile)
-    }
-    resetPayableForm()
-  }
-
-  const handleContribute = async (id) => {
-    const res = await contributeToPayable(id, contributionInput[id])
-    if (!res || !res.ok) alert(res?.message || 'Could not record payment')
-    else setContributionInput(prev => ({ ...prev, [id]: '' }))
   }
 
   return (
@@ -758,148 +657,9 @@ function ExpensesTab({
         </div>
       )}
 
-      <div className="section-title">Balances to pay off</div>
-      <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '-6px 0 14px' }}>
-        Add what you owe, then record small payments until the balance reaches zero. Each payment also appears in your expense log below.
-      </p>
-
-      <div className="payment-summary">
-        <div className="payment-box">
-          <span className="payment-label">Total to pay</span>
-          <span className="payment-value">₱{payablesTotalDue.toFixed(2)}</span>
-        </div>
-        <div className="payment-box">
-          <span className="payment-label">Paid so far</span>
-          <span className="payment-value paid">₱{payablesTotalPaid.toFixed(2)}</span>
-        </div>
-        <div className="payment-box">
-          <span className="payment-label">Still owed</span>
-          <span className="payment-value balance">₱{Math.max(0, payablesTotalRemaining).toFixed(2)}</span>
-        </div>
-      </div>
-
-      {isContractor && !showPayableForm && (
-        <button
-          className="btn btn-success"
-          style={{ marginBottom: '16px' }}
-          onClick={() => { setEditingPayableId(null); setExistingPayableReceiptUrl(null); setShowPayableForm(true) }}
-        >
-          + New balance to pay off
-        </button>
-      )}
-
-      {isContractor && showPayableForm && (
-        <div className="card" style={{ marginBottom: '20px' }}>
-          <form onSubmit={handlePayableSubmit}>
-            <div className="form-group">
-              <input
-                type="text"
-                placeholder="What this is for (e.g. Cement delivery, Labor week 2)"
-                value={payableForm.title}
-                onChange={e => setPayableForm({ ...payableForm, title: e.target.value })}
-                required
-              />
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="Full amount you need to pay (₱)"
-                value={payableForm.totalDue}
-                onChange={e => setPayableForm({ ...payableForm, totalDue: e.target.value })}
-                required
-              />
-              <label className="receipt-upload-label">
-                📎 {payableReceiptFile ? payableReceiptFile.name : editingPayableId ? 'Replace bill photo (optional)' : 'Bill / quote photo (optional)'}
-                <input type="file" accept="image/*" capture="environment" onChange={handlePayableFileChange} style={{ display: 'none' }} />
-              </label>
-              {payablePreviewUrl && (
-                <img src={payablePreviewUrl} alt="Preview" style={{ width: '100%', borderRadius: '8px', marginTop: '4px' }} />
-              )}
-              {editingPayableId && existingPayableReceiptUrl && !payablePreviewUrl && (
-                <div style={{ marginTop: '8px' }}>
-                  <div style={{ fontSize: '12px', color: 'var(--gray-500)', marginBottom: '6px' }}>Current bill image</div>
-                  <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(existingPayableReceiptUrl)}>🧾 View</button>
-                </div>
-              )}
-              <button type="submit" className="btn btn-primary">{editingPayableId ? 'Update balance' : 'Save balance'}</button>
-              <button type="button" className="btn btn-gray" onClick={resetPayableForm}>Cancel</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {payables.length === 0 && (
-        <div className="empty-state" style={{ marginBottom: '24px' }}>No balances yet. Add one when you owe a fixed amount you’ll pay in parts.</div>
-      )}
-
-      {payables.map((p) => {
-        const totalDue = Number(p.total_due) || 0
-        const paid = Number(p.amount_paid) || 0
-        const remaining = Math.round((totalDue - paid) * 100) / 100
-        const pct = totalDue > 0 ? Math.min(100, (paid / totalDue) * 100) : 0
-        return (
-          <div key={p.id} className="inventory-card" style={{ marginBottom: '12px' }}>
-            <div className="inventory-card-header">
-              <span className="inventory-card-name">{p.title}</span>
-              {p.receipt_url && (
-                <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(p.receipt_url)}>🧾</button>
-              )}
-            </div>
-            <div className="payment-status-card" style={{ marginTop: '8px' }}>
-              <div className="payment-progress-bar">
-                <div className="progress-fill" style={{ width: `${pct}%` }} />
-              </div>
-              <div className="payment-details">
-                <div className="payment-detail-row">
-                  <span className="payment-detail-label">Full amount:</span>
-                  <span className="payment-detail-value">₱{totalDue.toFixed(2)}</span>
-                </div>
-                <div className="payment-detail-row">
-                  <span className="payment-detail-label">Paid:</span>
-                  <span className="payment-detail-value paid">₱{paid.toFixed(2)}</span>
-                </div>
-                <div className="payment-detail-row">
-                  <span className="payment-detail-label">Left to pay:</span>
-                  <span className="payment-detail-value balance">₱{Math.max(0, remaining).toFixed(2)}</span>
-                </div>
-              </div>
-              {isContractor && remaining > 0 && (
-                <div className="payment-update-row">
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    placeholder="Pay now (₱)"
-                    value={contributionInput[p.id] || ''}
-                    onChange={e => setContributionInput(prev => ({ ...prev, [p.id]: e.target.value }))}
-                  />
-                  <button type="button" className="btn btn-info btn-sm" onClick={() => handleContribute(p.id)}>Record payment</button>
-                </div>
-              )}
-              {isContractor && remaining <= 0 && (
-                <div style={{ fontSize: '13px', color: 'var(--success, #15803d)', marginTop: '8px', fontWeight: 600 }}>Fully paid</div>
-              )}
-              {isContractor && (
-                <div className="inventory-card-actions" style={{ marginTop: '12px' }}>
-                  <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEditPayable(p)}>Edit</button>
-                  <button type="button" className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deletePayable(p.id)}>Delete</button>
-                </div>
-              )}
-            </div>
-            {!isContractor && (
-              <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--gray-400)', textAlign: 'center' }}>🔒 View only</div>
-            )}
-          </div>
-        )
-      })}
-
-      <div className="section-title" style={{ marginTop: '28px' }}>Expense log</div>
-      <p style={{ fontSize: '13px', color: 'var(--gray-500)', margin: '-6px 0 14px' }}>
-        One-off costs and each partial payment above (listed as “Payment: …”).
-      </p>
-
+      {/* Only contractors can add expenses */}
       {isContractor && !showForm && (
-        <button className="btn btn-success" style={{ marginBottom: '16px' }} onClick={() => { setEditingId(null); setExistingReceiptUrl(null); setShowForm(true) }}>+ Add expense</button>
+        <button className="btn btn-success" style={{ marginBottom: '16px' }} onClick={() => { setEditingId(null); setExistingReceiptUrl(null); setShowForm(true) }}>+ Add Expense</button>
       )}
 
       {isContractor && showForm && (
@@ -930,7 +690,7 @@ function ExpensesTab({
       )}
 
       {Object.keys(expensesByMonth).length === 0 && (
-        <div className="empty-state">No expenses in the log yet.</div>
+        <div className="empty-state">No expenses recorded yet.</div>
       )}
 
       {Object.entries(expensesByMonth).map(([month, exps]) => (
