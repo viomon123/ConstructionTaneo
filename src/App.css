@@ -525,6 +525,41 @@ body {
   font-size: 15px;
 }
 
+.inner-tab-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  background: var(--gray-100);
+  padding: 6px;
+  border-radius: 12px;
+}
+
+.inner-tab-bar button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--gray-700);
+  font-weight: 600;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.inner-tab-bar button.active {
+  background: var(--white);
+  color: var(--primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.attendance-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--gray-700);
+}
+
 /* ===== RECEIPT MODAL ===== */
 .receipt-modal {
   position: fixed;
