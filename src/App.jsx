@@ -210,95 +210,110 @@ function App() {
   }
 
   // ── EXPENSES ───────────────────────────────────────────
-  const addExpense = async (expense, receiptFile) => {
-    let receipt_url = null
+// ── EXPENSES ───────────────────────────────────────────
 
-    if (receiptFile) {
-      const fileName = `${Date.now()}-${receiptFile.name}`
-      const { error: uploadError } = await supabase.storage.from('receipts').upload(fileName, receiptFile)
-      if (uploadError) {
-        console.error('Upload error:', uploadError)
-      } else {
-        const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(fileName)
-        receipt_url = urlData.publicUrl
-      }
-    }
-    // ✏️ EDIT EXPENSE
-  const updateExpense = async (id, updates) => {
-    const { error } = await supabase
-      .from('expenses')
-      .update({
-        category: updates.category,
-        amount: updates.amount,
-        expense_date: updates.date,
-        total_price: updates.totalPrice,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
+// ✏️ EDIT EXPENSE
+const updateExpense = async (id, updates) => {
+  const { error } = await supabase
+    .from('expenses')
+    .update({
+      category: updates.category,
+      amount: updates.amount,
+      expense_date: updates.date,
+      total_price: updates.totalPrice,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', id)
 
-    if (error) {
-      console.error('Update expense error:', error)
-      return
-    }
+  if (error) {
+    console.error('Update expense error:', error)
+    return
+  }
 
-    setExpenses(prev =>
-      prev.map(e =>
-        e.id === id
-          ? {
-              ...e,
-              category: updates.category,
-              amount: updates.amount,
-              expense_date: updates.date,
-              total_price: updates.totalPrice
-            }
-          : e
-      )
+  setExpenses(prev =>
+    prev.map(e =>
+      e.id === id
+        ? {
+            ...e,
+            category: updates.category,
+            amount: updates.amount,
+            expense_date: updates.date,
+            total_price: updates.totalPrice
+          }
+        : e
     )
+  )
+}
+
+// 🗑️ DELETE EXPENSE
+const deleteExpense = async (id) => {
+  const { error } = await supabase
+    .from('expenses')
+    .delete()
+    .eq('id', id)
+
+  if (error) {
+    console.error('Delete expense error:', error)
+    return
   }
 
-  // 🗑️ DELETE EXPENSE
-  const deleteExpense = async (id) => {
-    const { error } = await supabase
-      .from('expenses')
-      .delete()
-      .eq('id', id)
+  setExpenses(prev => prev.filter(e => e.id !== id))
+}
 
-    if (error) {
-      console.error('Delete expense error:', error)
-      return
+// ➕ ADD EXPENSE
+const addExpense = async (expense, receiptFile) => {
+  let receipt_url = null
+
+  if (receiptFile) {
+    const fileName = `${Date.now()}-${receiptFile.name}`
+    const { error: uploadError } = await supabase.storage
+      .from('receipts')
+      .upload(fileName, receiptFile)
+
+    if (uploadError) {
+      console.error('Upload error:', uploadError)
+    } else {
+      const { data: urlData } = supabase.storage
+        .from('receipts')
+        .getPublicUrl(fileName)
+
+      receipt_url = urlData.publicUrl
     }
-
-    setExpenses(prev => prev.filter(e => e.id !== id))
-  }
-    const { data, error } = await supabase
-      .from('expenses')
-      .insert([{
-        category: expense.category,
-        amount: expense.amount,
-        expense_date: expense.date,
-        receipt_url,
-        total_price: expense.totalPrice || expense.amount,
-        paid_so_far: expense.initialPayment || 0,
-        is_paid: (expense.initialPayment || 0) >= (expense.totalPrice || expense.amount)
-      }])
-      .select()
-
-    if (error) { console.error('Insert expense error:', error); return }
-
-    // if initial payment > 0, log it as a payment too
-    if (expense.initialPayment > 0) {
-      await supabase.from('payments').insert([{
-        reference_id: data[0].id,
-        reference_type: 'expense',
-        amount: expense.initialPayment,
-        note: 'Initial payment',
-        payment_date: new Date().toISOString()
-      }])
-    }
-
-    setExpenses(prev => [...prev, ...data])
   }
 
+  const { data, error } = await supabase
+    .from('expenses')
+    .insert([{
+      category: expense.category,
+      amount: expense.amount,
+      expense_date: expense.date,
+      receipt_url,
+      total_price: expense.totalPrice || expense.amount,
+      paid_so_far: expense.initialPayment || 0,
+      is_paid:
+        (expense.initialPayment || 0) >=
+        (expense.totalPrice || expense.amount)
+    }])
+    .select()
+
+  if (error) {
+    console.error('Insert expense error:', error)
+    return
+  }
+
+  if (expense.initialPayment > 0) {
+    await supabase.from('payments').insert([{
+      reference_id: data[0].id,
+      reference_type: 'expense',
+      amount: expense.initialPayment,
+      note: 'Initial payment',
+      payment_date: new Date().toISOString()
+    }])
+  }
+
+  setExpenses(prev => [...prev, ...data])
+}
+  
   // ── DERIVED DATA ───────────────────────────────────────
   const totalInventoryCost = inventory.reduce((sum, item) => sum + (item.total_purchased_cost || 0), 0)
 
