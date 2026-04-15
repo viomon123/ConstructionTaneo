@@ -137,6 +137,8 @@ function App() {
     if (!item) return
 
     const newAmountPaid = Math.min(amountPaid, item.total_purchased_cost)
+    const previousPaid = item.amount_paid || 0
+    const paymentDelta = Math.round((newAmountPaid - previousPaid) * 100) / 100
 
     const { error } = await supabase
       .from('inventory')
@@ -148,6 +150,22 @@ function App() {
     setInventory(prev => prev.map(i =>
       i.id === id ? { ...i, amount_paid: newAmountPaid } : i
     ))
+
+    if (paymentDelta > 0) {
+      const expense_date = new Date().toLocaleDateString('en-CA')
+      const { data: expData, error: expError } = await supabase
+        .from('expenses')
+        .insert([{
+          category: `Inventory payment: ${item.name}`,
+          amount: paymentDelta,
+          expense_date,
+          receipt_url: null
+        }])
+        .select()
+
+      if (expError) console.error('Expense from payment error:', expError)
+      else if (expData?.[0]) setExpenses(prev => [...prev, expData[0]])
+    }
   }
 
   const consumeItem = async (id, quantityUsed) => {
@@ -217,6 +235,59 @@ function App() {
 
     if (error) { console.error('Insert expense error:', error); return }
     setExpenses(prev => [...prev, ...data])
+  }
+
+  const removeReceiptFromStorage = async (receiptUrl) => {
+    if (!receiptUrl) return
+    const segment = receiptUrl.split('/receipts/')[1]
+    if (!segment) return
+    const { error } = await supabase.storage.from('receipts').remove([decodeURIComponent(segment)])
+    if (error) console.error('Storage remove receipt:', error)
+  }
+
+  const updateExpense = async (id, expense, receiptFile) => {
+    const existing = expenses.find(e => e.id === id)
+    let receipt_url
+
+    if (receiptFile) {
+      if (existing?.receipt_url) await removeReceiptFromStorage(existing.receipt_url)
+      const fileName = `${Date.now()}-${receiptFile.name}`
+      const { error: uploadError } = await supabase.storage
+        .from('receipts')
+        .upload(fileName, receiptFile)
+
+      if (uploadError) {
+        console.error('Upload error:', uploadError)
+      } else {
+        const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(fileName)
+        receipt_url = urlData.publicUrl
+      }
+    }
+
+    const payload = {
+      category: expense.category,
+      amount: expense.amount,
+      expense_date: expense.date
+    }
+    if (receipt_url !== undefined) payload.receipt_url = receipt_url
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .update(payload)
+      .eq('id', id)
+      .select()
+
+    if (error) { console.error('Update expense error:', error); return }
+    const updated = data?.[0]
+    if (updated) setExpenses(prev => prev.map(e => (e.id === id ? updated : e)))
+  }
+
+  const deleteExpense = async (id) => {
+    const exp = expenses.find(e => e.id === id)
+    if (exp?.receipt_url) await removeReceiptFromStorage(exp.receipt_url)
+    const { error } = await supabase.from('expenses').delete().eq('id', id)
+    if (error) { console.error('Delete expense error:', error); return }
+    setExpenses(prev => prev.filter(e => e.id !== id))
   }
 
   const totalInventoryCost = inventory.reduce((sum, item) => sum + (item.total_purchased_cost || 0), 0)
@@ -305,6 +376,8 @@ function App() {
         {activeTab === 'expenses' && (
           <ExpensesTab
             addExpense={addExpense}
+            updateExpense={updateExpense}
+            deleteExpense={deleteExpense}
             expensesByMonth={expensesByMonth}
             isContractor={isContractor}
           />
@@ -539,27 +612,56 @@ function DailyLogTab({ dailyChanges }) {
   )
 }
 
-function ExpensesTab({ addExpense, expensesByMonth, isContractor }) {
+function ExpensesTab({ addExpense, updateExpense, deleteExpense, expensesByMonth, isContractor }) {
   const [form, setForm] = useState({ category: '', amount: '', date: '' })
   const [receiptFile, setReceiptFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
   const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [existingReceiptUrl, setExistingReceiptUrl] = useState(null)
   const [viewingReceipt, setViewingReceipt] = useState(null)
+
+  const resetForm = () => {
+    setForm({ category: '', amount: '', date: '' })
+    setReceiptFile(null)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(null)
+    setEditingId(null)
+    setExistingReceiptUrl(null)
+    setShowForm(false)
+  }
 
   const handleFileChange = (e) => {
     const file = e.target.files[0]
     if (!file) return
     setReceiptFile(file)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
     setPreviewUrl(URL.createObjectURL(file))
+  }
+
+  const startEdit = (exp) => {
+    setEditingId(exp.id)
+    setForm({
+      category: exp.category,
+      amount: String(exp.amount),
+      date: exp.expense_date.slice(0, 10)
+    })
+    setReceiptFile(null)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(null)
+    setExistingReceiptUrl(exp.receipt_url || null)
+    setShowForm(true)
   }
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    addExpense({ category: form.category, amount: parseFloat(form.amount), date: form.date }, receiptFile)
-    setForm({ category: '', amount: '', date: '' })
-    setReceiptFile(null)
-    setPreviewUrl(null)
-    setShowForm(false)
+    const payload = { category: form.category, amount: parseFloat(form.amount), date: form.date }
+    if (editingId) {
+      updateExpense(editingId, payload, receiptFile)
+    } else {
+      addExpense(payload, receiptFile)
+    }
+    resetForm()
   }
 
   return (
@@ -575,7 +677,7 @@ function ExpensesTab({ addExpense, expensesByMonth, isContractor }) {
 
       {/* Only contractors can add expenses */}
       {isContractor && !showForm && (
-        <button className="btn btn-success" style={{ marginBottom: '16px' }} onClick={() => setShowForm(true)}>+ Add Expense</button>
+        <button className="btn btn-success" style={{ marginBottom: '16px' }} onClick={() => { setEditingId(null); setExistingReceiptUrl(null); setShowForm(true) }}>+ Add Expense</button>
       )}
 
       {isContractor && showForm && (
@@ -586,14 +688,20 @@ function ExpensesTab({ addExpense, expensesByMonth, isContractor }) {
               <input type="number" step="0.01" placeholder="Amount" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} required />
               <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required />
               <label className="receipt-upload-label">
-                📎 {receiptFile ? receiptFile.name : 'Attach Receipt Photo'}
+                📎 {receiptFile ? receiptFile.name : editingId ? 'Replace receipt (optional)' : 'Attach Receipt Photo'}
                 <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} style={{ display: 'none' }} />
               </label>
               {previewUrl && (
                 <img src={previewUrl} alt="Preview" style={{ width: '100%', borderRadius: '8px', marginTop: '4px' }} />
               )}
-              <button type="submit" className="btn btn-primary">Add Expense</button>
-              <button type="button" className="btn btn-gray" onClick={() => { setShowForm(false); setReceiptFile(null); setPreviewUrl(null) }}>Cancel</button>
+              {editingId && existingReceiptUrl && !previewUrl && (
+                <div style={{ marginTop: '8px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--gray-500)', marginBottom: '6px' }}>Current receipt</div>
+                  <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(existingReceiptUrl)} style={{ marginRight: '8px' }}>🧾 View</button>
+                </div>
+              )}
+              <button type="submit" className="btn btn-primary">{editingId ? 'Update Expense' : 'Add Expense'}</button>
+              <button type="button" className="btn btn-gray" onClick={resetForm}>Cancel</button>
             </div>
           </form>
         </div>
@@ -606,16 +714,24 @@ function ExpensesTab({ addExpense, expensesByMonth, isContractor }) {
       {Object.entries(expensesByMonth).map(([month, exps]) => (
         <div key={month} className="month-card">
           <div className="month-title">{month}</div>
-          {exps.map((exp, i) => (
-            <div key={i} className="expense-row">
-              <div>
+          {exps.map((exp) => (
+            <div key={exp.id} className="expense-row">
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div>{exp.category}</div>
                 <div style={{ fontSize: '12px', color: 'var(--gray-400)' }}>{exp.expense_date}</div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span>₱{exp.amount.toFixed(2)}</span>
-                {exp.receipt_url && (
-                  <button className="receipt-thumb-btn" onClick={() => setViewingReceipt(exp.receipt_url)}>🧾</button>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>₱{exp.amount.toFixed(2)}</span>
+                  {exp.receipt_url && (
+                    <button type="button" className="receipt-thumb-btn" onClick={() => setViewingReceipt(exp.receipt_url)}>🧾</button>
+                  )}
+                </div>
+                {isContractor && (
+                  <div className="inventory-card-actions" style={{ width: '100%', maxWidth: '220px' }}>
+                    <button type="button" className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => startEdit(exp)}>Edit</button>
+                    <button type="button" className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => deleteExpense(exp.id)}>Delete</button>
+                  </div>
                 )}
               </div>
             </div>
