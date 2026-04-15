@@ -223,7 +223,53 @@ function App() {
         receipt_url = urlData.publicUrl
       }
     }
+    // ✏️ EDIT EXPENSE
+  const updateExpense = async (id, updates) => {
+    const { error } = await supabase
+      .from('expenses')
+      .update({
+        category: updates.category,
+        amount: updates.amount,
+        expense_date: updates.date,
+        total_price: updates.totalPrice,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
 
+    if (error) {
+      console.error('Update expense error:', error)
+      return
+    }
+
+    setExpenses(prev =>
+      prev.map(e =>
+        e.id === id
+          ? {
+              ...e,
+              category: updates.category,
+              amount: updates.amount,
+              expense_date: updates.date,
+              total_price: updates.totalPrice
+            }
+          : e
+      )
+    )
+  }
+
+  // 🗑️ DELETE EXPENSE
+  const deleteExpense = async (id) => {
+    const { error } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', id)
+
+    if (error) {
+      console.error('Delete expense error:', error)
+      return
+    }
+
+    setExpenses(prev => prev.filter(e => e.id !== id))
+  }
     const { data, error } = await supabase
       .from('expenses')
       .insert([{
@@ -333,13 +379,15 @@ function App() {
           />
         )}
         {activeTab === 'expenses' && (
-          <ExpensesTab
-            addExpense={addExpense}
-            expensesByMonth={expensesByMonth}
-            isContractor={isContractor}
-            payments={payments}
-            addPayment={addPayment}
-          />
+              <ExpensesTab
+              addExpense={addExpense}
+              expensesByMonth={expensesByMonth}
+              isContractor={isContractor}
+              payments={payments}
+              addPayment={addPayment}
+              updateExpense={updateExpense}
+              deleteExpense={deleteExpense}
+            />
         )}
         {activeTab === 'daily' && (
           <DailyLogTab dailyChanges={dailyChanges} />
@@ -622,8 +670,17 @@ function DailyLogTab({ dailyChanges }) {
 }
 
 // ── EXPENSES TAB ───────────────────────────────────────────────────────────────
-function ExpensesTab({ addExpense, expensesByMonth, isContractor, payments, addPayment }) {
+function ExpensesTab({ 
+  addExpense, 
+  expensesByMonth, 
+  isContractor, 
+  payments, 
+  addPayment,
+  updateExpense,
+  deleteExpense
+}) {
   const [form, setForm] = useState({ category: '', amount: '', date: '', totalPrice: '', initialPayment: '' })
+  const [editingExpense, setEditingExpense] = useState(null)
   const [receiptFile, setReceiptFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
   const [showForm, setShowForm] = useState(false)
@@ -638,16 +695,38 @@ function ExpensesTab({ addExpense, expensesByMonth, isContractor, payments, addP
     setReceiptFile(file)
     setPreviewUrl(URL.createObjectURL(file))
   }
-
+  const startEdit = (exp) => {
+    setEditingExpense(exp)
+    setForm({
+      category: exp.category,
+      amount: exp.amount,
+      date: exp.expense_date,
+      totalPrice: exp.total_price || '',
+      initialPayment: ''
+    })
+    setShowForm(true)
+  }
   const handleSubmit = (e) => {
     e.preventDefault()
-    addExpense({
-      category: form.category,
-      amount: parseFloat(form.amount),
-      date: form.date,
-      totalPrice: parseFloat(form.totalPrice) || parseFloat(form.amount),
-      initialPayment: parseFloat(form.initialPayment) || 0
-    }, receiptFile)
+  
+    if (editingExpense) {
+      updateExpense(editingExpense.id, {
+        category: form.category,
+        amount: parseFloat(form.amount),
+        date: form.date,
+        totalPrice: parseFloat(form.totalPrice) || parseFloat(form.amount)
+      })
+      setEditingExpense(null)
+    } else {
+      addExpense({
+        category: form.category,
+        amount: parseFloat(form.amount),
+        date: form.date,
+        totalPrice: parseFloat(form.totalPrice) || parseFloat(form.amount),
+        initialPayment: parseFloat(form.initialPayment) || 0
+      }, receiptFile)
+    }
+  
     setForm({ category: '', amount: '', date: '', totalPrice: '', initialPayment: '' })
     setReceiptFile(null)
     setPreviewUrl(null)
@@ -766,6 +845,27 @@ function ExpensesTab({ addExpense, expensesByMonth, isContractor, payments, addP
                     <button className="receipt-thumb-btn" onClick={() => setPayingExpense(exp)}>
                       {exp.is_paid ? '✅' : '💳'}
                     </button>
+                    {isContractor && (
+                          <>
+                            <button 
+                              className="receipt-thumb-btn"
+                              onClick={() => startEdit(exp)}
+                            >
+                              ✏️
+                            </button>
+
+                            <button 
+                              className="receipt-thumb-btn"
+                              onClick={() => {
+                                if (confirm('Delete this expense?')) {
+                                  deleteExpense(exp.id)
+                                }
+                              }}
+                            >
+                              🗑️
+                            </button>
+                          </>
+                        )}
                   </div>
                 </div>
                 {hasInstallments && (
