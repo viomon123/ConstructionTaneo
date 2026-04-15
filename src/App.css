@@ -320,7 +320,93 @@ body {
 .payment-value.balance {
   color: #fca5a5;
 }
+/* ===== EXPENSE ITEM CARD ===== */
+.expense-item-card {
+  background: var(--white);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  margin-bottom: 10px;
+  border-left: 3px solid var(--warning);
+}
 
+.expense-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.expense-category {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--gray-900);
+}
+
+.expense-date {
+  font-size: 12px;
+  color: var(--gray-400);
+  margin-top: 3px;
+}
+
+.expense-amount {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gray-900);
+}
+
+/* ===== EXPENSE PAYMENT DETAILS ===== */
+.expense-payment-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--gray-200);
+  border-bottom: 1px solid var(--gray-200);
+}
+
+/* ===== EXPENSE TOTAL ROWS ===== */
+.expense-total {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--gray-900);
+}
+
+.paid-text {
+  color: #059669;
+}
+
+.balance-text {
+  color: #dc2626;
+}
+
+/* ===== INVENTORY LOGS ===== */
+.inventory-logs-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 640px) {
+  .expense-item-card {
+    padding: 10px;
+  }
+
+  .expense-header {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .inventory-card-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+}
 /* ===== PAYMENT STATUS CARD ===== */
 .payment-status-card {
   background: #f8fafc;
